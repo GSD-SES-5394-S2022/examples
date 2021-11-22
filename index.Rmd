@@ -1,0 +1,72 @@
+---
+title: "Course Overview"
+author: "Carole Voulgaris"
+date: "11/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Assignment 1
+
+Submit your GitHub username, select a city for your project.
+
+# Assignment 2
+
+Zones, networks, skims
+
+# Assignment 3
+
+Trip production literature
+
+# Assignment 4
+
+Estimate trip production model
+
+# Assignment 5
+
+Apply a trip production model to estimate trip productions
+
+# Assignment 6
+
+Apply a trip attraction model to estimate trip attractions
+
+# Assignment 7
+
+Apply a trip distribution model to generate OD matrices
+
+# Assignment 8
+
+Mode choice literature
+
+# Assignment 9
+
+Estimate mode choice model
+
+# Assignment 10
+
+Apply a mode choice model
+
+# Assignment 11
+
+Trip assignment - pretend
+
+# Assignment 12 
+
+Transit assignment - all or nothing
+
+# Assignment 13
+
+Highway assignment - all or nothing
+
+# Assignment 14 
+
+Network change and comparison
+
+# Assignment 15
+
+Land use change and comparison
+
+
