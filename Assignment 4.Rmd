@@ -1,0 +1,92 @@
+---
+title: "Assignment 4"
+subtitle: "Estimating a Trip Production Model"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Step 0: Load libraries
+
+```{r}
+library(httr)
+library(jtools)
+library(srvyr)
+library(survey)
+library(tidyverse)
+library(treemapify)
+```
+
+
+# Step 1: Load data
+
+The data you need are in a zipped file you can download from https://nhts.ornl.gov/assets/2016/download/csv.zip.
+
+The GET() command below downloads the zipped file (I put it inside an invisible call to keep the output here cleaner - you don't have to do that in your own script if you don't mind looking at the message confirming that you'ver read the file).
+
+In the next line, read_csv() reads the contents of hhpub.csv (which has all the household-level data from the NHTS).
+
+filter() removes all the households from outside the Buffalo MSA (FIPS code 15380) and select() narrows down your variables to just the ones you want to include in your model. This model is to predict the number of daily household trips (CNTTDHH), so that will be my dependent variable. I'm keeping my model very simple by including only five independent variables:
+
+Number of people in the household (HHSIZE)
+Number of vehicles in the household (HHVEHCNT)
+Household income (HHFAMINC)
+Race/ethnicity (HH_RACE and HH_HISP)
+Residential density (HBRESDN)
+The variable called WTHHFIN is a weight that you can use to create representative summary statistics, even if your survey sample isn't representative of the study population (but see my earlier note about how this doesn't technically work for MSA-level analysis).
+
+Look though the NHTS codebook (https://nhts.ornl.gov/assets/codebook_v1.1.pdf, pages 1-16) for more details on available household-level variables.
+
+I use `mutate()` with `case_when()` to create a combined race/ethnicity variable and to create a continuous income variable by taking the mid-point of each income category (note that the value for the top income category is totally arbitrary).
+
+`head()` shows you the first six rows of your dataframe so you can confirm that it looks how you expected it to. Each row represents a household.
+
+```{r}
+invisible(GET("https://nhts.ornl.gov/assets/2016/download/csv.zip", write_disk(hh <- tempfile(fileext = ".zip"))))
+
+hh_data <- read_csv(unzip(hh, file="hhpub.csv"), col_types = cols()) %>%
+  filter(HH_CBSA == 15380) %>% # Buffalo
+  select(CNTTDHH, HHSIZE, HHVEHCNT, HHFAMINC, HH_RACE,
+         HH_HISP, HBRESDN, WTHHFIN) %>%
+  mutate(race_eth = case_when(HH_HISP == '01' ~ "4.Hispanic",
+                              HH_RACE == '01' ~ "1.Non-Hispanic White",
+                              HH_RACE == '02' ~ "2.Non-Hispanic Black",
+                              HH_RACE == '03' ~ "3.Asian",
+                              TRUE ~ "5.Other")) %>%
+  mutate(income_k = case_when(HHFAMINC == '01' ~ 5,
+                              HHFAMINC == '02' ~ 12.5,
+                              HHFAMINC == '03' ~ 20,
+                              HHFAMINC == '04' ~ 30,
+                              HHFAMINC == '05' ~ 42.5,
+                              HHFAMINC == '06' ~ 62.5,
+                              HHFAMINC == '07' ~ 87.5,
+                              HHFAMINC == '08' ~ 112.5,
+                              HHFAMINC == '09' ~ 137.5,
+                              HHFAMINC == '10' ~ 175,
+                              HHFAMINC == '11' ~ 250))  
+head(hh_data)
+```
+
+Before I get started on my analysis, I need to specify the survey design to correctly incorporate the weights into all of the subsequent analysis.
+
+```{r}
+hh_svy <- hh_data %>%
+  as_survey_design(ids=1, weight = WTHHFIN)
+```
+
+# Step 2: Visualize your data
+
+This is optional in the sense that you could just move onto building your model (Step 3) if you want, but it's really helpful to get a sense of your data before you do that.
+
+First, let's look at the distribution of the number of trips per day that households make (the dependent variable of the model we'll be estimating). What do you notice?
+
+```{r}
+avg_trips <- svymean(~CNTTDHH, hh_svy)
+max <- max(hh_data$CNTTDHH)
+
+trips_hist <- svyhist(~CNTTDHH,  design = hh_svy, freq = TRUE,
+       breaks = seq(0, max, by = 1))
+```
+
