@@ -1,0 +1,264 @@
+---
+title: "Assignment 4"
+subtitle: "Estimating a Trip Production Model"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+To estimate your trip production model, you'll need to: 
+
+1. Load the household survey data *Note: In real life, you should use a regional travel survey that focuses just on your study area. For this class exercise though, we'll use the National Household Travel Survey (NHTS). This allows us to practice estimating a model, but you should note that the NHTS sampling/weighting methods do not support statistically valid analyses at a geographic level smaller than a census region (so analyzing a subsample of just the households from a single MSA isn't right because your weighted sample isn't necessarily representative).*
+2. Visualize the household survey data (technically optional, but still a good idea)
+3. Estimate a regression model 
+
+# Step 0: Load libraries
+
+```{r, message=FALSE}
+library(httr)
+library(knitr)
+library(jtools)
+library(srvyr)
+library(survey)
+library(tidyverse)
+library(treemapify)
+```
+
+
+# Step 1: Load data
+
+The data you need are in a zipped file you can download from https://nhts.ornl.gov/assets/2016/download/csv.zip.
+
+The GET() command below downloads the zipped file (I put it inside an invisible call to keep the output here cleaner - you don't have to do that in your own script if you don't mind looking at the message confirming that you'ver read the file).
+
+In the next line, read_csv() reads the contents of hhpub.csv (which has all the household-level data from the NHTS).
+
+filter() removes all the households from outside the Buffalo MSA (FIPS code 15380) and select() narrows down your variables to just the ones you want to include in your model. This model is to predict the number of daily household trips (CNTTDHH), so that will be my dependent variable. I'm keeping my model very simple by including only five independent variables:
+
+* Number of people in the household (HHSIZE)
+* Number of vehicles in the household (HHVEHCNT)
+* Household income (HHFAMINC)
+* Race/ethnicity (HH_RACE and HH_HISP)
+* Residential density (HBRESDN)
+
+The variable called WTHHFIN is a weight that you can use to create representative summary statistics, even if your survey sample isn't representative of the study population (but see my earlier note about how this doesn't technically work for MSA-level analysis).
+
+Look though the NHTS codebook (https://nhts.ornl.gov/assets/codebook_v1.1.pdf, pages 1-16) for more details on available household-level variables.
+
+I use `mutate()` with `case_when()` to create a combined race/ethnicity variable and to create a continuous income variable by taking the mid-point of each income category (note that the value for the top income category is totally arbitrary).
+
+`head()` shows you the first six rows of your dataframe so you can confirm that it looks how you expected it to. Each row represents a household.
+
+```{r}
+invisible(GET("https://nhts.ornl.gov/assets/2016/download/csv.zip", write_disk(hh <- tempfile(fileext = ".zip"))))
+
+hh_data <- read_csv(unzip(hh, file="hhpub.csv"), col_types = cols()) %>%
+  filter(HH_CBSA == 15380) %>% # Buffalo
+  select(CNTTDHH, HHSIZE, HHVEHCNT, HHFAMINC, HH_RACE,
+         HH_HISP, HBRESDN, WTHHFIN) %>%
+  mutate(race_eth = case_when(HH_HISP == '01' ~ "4.Hispanic",
+                              HH_RACE == '01' ~ "1.Non-Hispanic White",
+                              HH_RACE == '02' ~ "2.Non-Hispanic Black",
+                              HH_RACE == '03' ~ "3.Asian",
+                              TRUE ~ "5.Other")) %>%
+  mutate(income_k = case_when(HHFAMINC == '01' ~ 5,
+                              HHFAMINC == '02' ~ 12.5,
+                              HHFAMINC == '03' ~ 20,
+                              HHFAMINC == '04' ~ 30,
+                              HHFAMINC == '05' ~ 42.5,
+                              HHFAMINC == '06' ~ 62.5,
+                              HHFAMINC == '07' ~ 87.5,
+                              HHFAMINC == '08' ~ 112.5,
+                              HHFAMINC == '09' ~ 137.5,
+                              HHFAMINC == '10' ~ 175,
+                              HHFAMINC == '11' ~ 250))  
+head(hh_data)
+```
+
+Before I get started on my analysis, I need to specify the survey design to correctly incorporate the weights into all of the subsequent analysis.
+
+```{r}
+hh_svy <- hh_data %>%
+  as_survey_design(ids=1, weight = WTHHFIN)
+```
+
+# Step 2: Visualize your data
+
+This is optional in the sense that you could just move onto building your model (Step 3) if you want, but it's really helpful to get a sense of your data before you do that.
+
+## Number of daily trips
+
+First, let's look at the distribution of the number of trips per day that households make (the dependent variable of the model we'll be estimating). What do you notice about the distribution?
+
+```{r}
+avg_trips <- svymean(~CNTTDHH, hh_svy)
+max <- max(hh_data$CNTTDHH)
+
+trips_hist <- svyhist(~CNTTDHH,  design = hh_svy, freq = TRUE,
+       breaks = seq(0, max, by = 1),
+        xlab = "Number of survey-day household trips",
+        ylab = "Number of households",
+       main = "", col = "gray",
+       yaxt = "n")
+
+axis(2, at = seq(0, 40000, by = 5000),
+    labels = prettyNum(seq(0, 40000, by = 5000), 
+                       big.mark = ",", scientific = FALSE))
+
+text(x=mean(trips_hist$breaks), y=max(trips_hist$counts), 
+     labels=paste("Average:", formatC(mean(avg_trips), digits = 3), 
+                  "\nStandard error:", formatC(SE(avg_trips), digits = 3)),
+     adj = c(0,1))
+```
+
+## Household size
+
+Now lets look at the distribution of household sizes.
+
+```{r}
+avg_size <- svymean(~HHSIZE, hh_svy)
+
+max <- max(hh_data$HHSIZE)
+
+hh_size_hist <- svyhist(~HHSIZE, design=hh_svy, freq = TRUE,
+                        breaks = seq(0, max, by = 1), 
+                        xlab = "Number of household members",
+                        ylab = "Number of households",
+                        main = "", col = "gray",
+                        yaxt = "n")
+
+axis(2, at = seq(0, 250000, by = 50000),
+    labels = prettyNum(seq(0, 250000, by = 50000), 
+                       big.mark = ",", scientific = FALSE))
+
+text(x=mean(hh_size_hist$breaks), y=max(hh_size_hist$counts), 
+     labels=paste("Average:", formatC(mean(avg_size), digits = 3), 
+                  "\nStandard error:", formatC(SE(avg_size), digits = 3)),
+     adj = c(0,1))
+```
+
+## Income
+
+Now we'll look at income.
+
+```{r}
+avg_inc_k <- svymean(~income_k, hh_svy, na.rm = TRUE)
+
+max <- ceiling(max(hh_data$income_k, na.rm = TRUE))
+
+income_hist <- svyhist(~income_k, freq = TRUE, breaks = seq(0, max, by = 10), hh_svy,
+                       main = "", xlab = "Annual household income", 
+                       ylab = "Number of households", 
+                       col= "gray", axes = FALSE)
+
+axis(1, at = ticks <- seq(0,max(income_hist$breaks), by = 50), 
+     labels = paste("$",prettyNum(ticks*1000, 
+                                  big.mark = ",",scientific = FALSE),sep=""))
+
+axis(2, at = seq(0 ,max(income_hist$counts), by = 10000),
+    labels = prettyNum(seq(0, max(income_hist$counts), by = 10000), 
+                       big.mark = ",", scientific = FALSE))
+
+text(x=mean(income_hist$breaks), y=max(income_hist$counts), 
+     labels=paste("Average:", 
+                   paste("$", prettyNum(mean(avg_inc_k) * 1000, 
+                                        big.mark = ",",scientific = FALSE, digits=0),sep=""), 
+                  "\nStandard error:", 
+                  paste("$", prettyNum(SE(avg_inc_k) * 1000, 
+                                        big.mark = ",",scientific = FALSE, digits=0),sep="")),
+     adj = c(0,1))
+```
+
+## Residential density
+
+The last continuous variable we'll look at is residential density.
+
+```{r}
+avg_dens <- svymean(~HBRESDN, hh_svy, na.rm = TRUE)
+
+dens_hist <- svyhist(~HBRESDN, freq = TRUE, design = hh_svy,
+                     breaks = 20, main = "", 
+                     xlab = "Housing units per square mile", 
+                     ylab = "Number of households in block groups of that density", 
+                     col= "gray", axes = FALSE)
+
+axis(1, at = seq(0,15000, by = 1000), 
+     labels = prettyNum(seq(0,15000, by = 1000), big.mark = ","))
+
+axis(2, at = seq(0,140000, by = 10000),
+    labels = prettyNum(seq(0,140000, by = 10000), 
+                       big.mark = ",", scientific = FALSE))
+
+text(x=mean(dens_hist$breaks), y=max(dens_hist$counts), 
+     labels=paste("Average:", 
+                   prettyNum(mean(avg_dens), big.mark = ",",scientific = FALSE, digits=0), 
+                  "\nStandard error:", 
+                  prettyNum(SE(avg_dens), big.mark = ",",scientific = FALSE, digits=0)),
+     adj = c(0,1))
+```
+
+## Race/ethnicity
+
+Race/ethnicity is a categorical variable, so I'll just calculate the relative shares of the population in each race/ethnicity category I've defined.
+
+```{r}
+races <- svymean(~race_eth, hh_svy)
+
+race_tibble <- tibble(race = c("Non-Hispanic White",
+                               "Non-Hispanic Black",
+                               "Asian",
+                               "Hispanic",
+                               "Other"),
+                     Percentage = as.numeric(races*100),
+                     SE = as.numeric(SE(races*100)))
+
+kable(race_tibble, digits = 1)
+```
+
+And I'll use a tree map to visualize those shares.
+
+```{r}
+ggplot(race_tibble, aes(area = Percentage, fill= race)) +
+  geom_treemap(show.legend = FALSE) +
+  geom_treemap_text(aes(label = paste(race, "\n",
+                                      prettyNum(Percentage, digits = 0),
+                                      "%",sep = "")), 
+                        color = "white") +
+  scale_fill_grey()
+```
+
+# Step 3: Estimate regression model
+
+First, we'll include all the variables we just looked at. Note that I've log-transfored income and residential density. This is because I expect the percentage increase in these variables to be more relevant than the the absolute increase.
+
+`summ()` creates a summary of the model results, including goodness-of-fit statistics.
+
+```{r}
+model.1 <- svyglm(CNTTDHH ~ HHSIZE + HHVEHCNT + log(income_k) + race_eth + log(HBRESDN), 
+                 design=hh_svy)
+
+model.results.1 <- summ(model.1)
+model.results.1
+```
+
+The results show that household size, income, and residential density are all significant predictors of the number of daily household trips. Let's try a second model that includes only those three variables.
+
+```{r}
+model.2 <- svyglm(CNTTDHH ~ HHSIZE + log(income_k) + log(HBRESDN), 
+                 design=hh_svy)
+
+export_summs(model.1, model.2)
+```
+
+# Step 4 visualize model results
+
+# Step 5 Save model results
+
+```{r}
+write_csv(cbind(variable = names(coefficients(model.1)),
+                      as.data.frame(model.results.1$coeftable)),
+          file = "prod_model.csv")
+```
+

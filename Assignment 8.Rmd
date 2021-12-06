@@ -1,0 +1,30 @@
+---
+title: "Assignment 7"
+author: "Carole Voulgaris"
+date: "12/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r}
+library(ggthemes)
+library(sf)
+library(stats)
+library(tidycensus)
+library(tidyverse)
+library(knitr)
+```
+
+# Apply gravity model
+
+
+
+# Calibrate gravity model
+
+
+# Show desire lines

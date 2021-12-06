@@ -9,37 +9,37 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# Assignment 1
-
-Submit your GitHub username, select a city for your project.
-
-# Assignment 2
-
-Zones, networks, skims
-
-# Assignment 3
+# Assignment 1 
 
 Trip production literature
 
-# Assignment 4
+# Assignment 2
 
-Estimate trip production model
+Mode choice literature
+
+# Assignment 3:
+
+Destination choice literature
+
+# Assignment 4:
+
+Route choice literature, trip assignment: pretend
 
 # Assignment 5
 
-Apply a trip production model to estimate trip productions
+Zones, networks, skims
 
 # Assignment 6
 
-Apply a trip attraction model to estimate trip attractions
+Estimate trip production model
 
 # Assignment 7
 
-Apply a trip distribution model to generate OD matrices
+Apply trip production and attraction models, and balance them
 
 # Assignment 8
 
-Mode choice literature
+Apply a trip distribution model to generate OD matrices
 
 # Assignment 9
 
@@ -49,24 +49,14 @@ Estimate mode choice model
 
 Apply a mode choice model
 
-# Assignment 11
+# Assignment 11 
 
-Trip assignment - pretend
+Trip assignment - all or nothing
 
 # Assignment 12 
 
-Transit assignment - all or nothing
+Network, Land use change and comparison
 
-# Assignment 13
 
-Highway assignment - all or nothing
-
-# Assignment 14 
-
-Network change and comparison
-
-# Assignment 15
-
-Land use change and comparison
 
 

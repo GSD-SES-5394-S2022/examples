@@ -1,0 +1,162 @@
+---
+title: "Assignment 7"
+author: "Carole Voulgaris"
+date: "12/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r}
+library(ggthemes)
+library(sf)
+library(stats)
+library(tidycensus)
+library(tidyverse)
+library(knitr)
+```
+
+
+# Estimte productions
+
+## Load household data
+
+```{r}
+vars = c(num_HH = "B08201_001",
+        HHSIZ = "B25010_001", # not a typo; the E gets added later.
+        HH_1VEH = "B08201_003",
+        HH_2VEH = "B08201_004",
+        HH_3VEH = "B08201_005",
+        HH_4VEH = "B08201_006",
+        HHFAMINC = "B06011_001",
+        num_HUs = "B25001_001",
+        tot_pop = "B01003_001",
+        white_pop = "B03002_003",
+        black_pop = "B03002_004",
+        hisp_pop = "B03002_012",
+        asian_pop = "B03002_006")
+
+tracts <- get_acs(geography = "tract", variables = vars, 
+                  state = "NY", county = c("Erie", "Niagara"), 
+                  geometry = TRUE, output = "wide") %>%
+  mutate(HHVEHCNT = 
+         (HH_1VEHE + 2*HH_2VEHE + 3*HH_3VEHE + 4*HH_4VEHE)/num_HHE) %>%
+  mutate(income_k = HHFAMINCE/1000) %>%
+  mutate(pct_white = white_popE / tot_popE) %>%
+  mutate(pct_black = black_popE / tot_popE) %>%
+  mutate(pct_hisp = hisp_popE / tot_popE) %>%
+  mutate(pct_asian = asian_popE / tot_popE) %>%
+  mutate(pct_other = 1 - pct_white - pct_black - pct_hisp - pct_asian) %>%
+  st_transform(2828)  %>% # makes it so you can calculate the tract area
+  mutate(sq_mi = as.numeric(st_area(.))/(5280^2)) %>% #5280 feet per mile
+  mutate(HBRESDN = num_HUsE / sq_mi) %>%
+  rename(num_HH = num_HHE) %>%
+  filter(tot_popE > 0) %>%
+  select(GEOID, HHSIZE, HHVEHCNT, income_k, pct_white, pct_black, pct_hisp, pct_asian,
+         pct_other, HBRESDN, num_HH)
+
+head(tracts)
+```
+
+
+## Visualize data
+
+
+# Load trip productions model
+
+```{r}
+model_results <- read_csv("prod_model.csv")
+model_results
+```
+
+## Estimate productions
+
+```{r}
+tracts <- tracts %>%
+  mutate(productions = num_HH * (
+    model_results$Est.[model_results$variable == "(Intercept)"] + 
+    model_results$Est.[model_results$variable == "HHSIZE"] * HHSIZE +
+    model_results$Est.[model_results$variable == "HHVEHCNT"] * HHVEHCNT +
+    model_results$Est.[model_results$variable == "log(income_k)"] * log(income_k) +
+    model_results$Est.[model_results$variable == "race_eth2.Non-Hispanic Black"] * pct_black +
+    model_results$Est.[model_results$variable == "race_eth3.Asian"] * pct_asian +
+    model_results$Est.[model_results$variable == "race_eth4.Hispanic"] * pct_hisp +
+    model_results$Est.[model_results$variable == "race_eth5.Other"] * pct_other +
+    model_results$Est.[model_results$variable == "log(HBRESDN)"] * log(HBRESDN)))
+
+kable(head(tracts))
+```
+
+# Get zonal employment data
+
+```{r}
+LODES_url <- "https://lehd.ces.census.gov/data/lodes/LODES7/ny/wac/ny_wac_S000_JT00_2019.csv.gz"
+
+employment <- read_csv(LODES_url) %>%
+  mutate(w_tract = substr(w_geocode, 1, 11)) %>%
+  group_by(w_tract) %>%
+  summarise(across(everything(), sum)) %>%
+  select(-w_geocode) %>%
+  mutate(county = substr(w_tract,1,5)) %>%
+  filter(county == "36029" |
+        county == "36063") %>%
+  rename(total_emp = C000) %>%
+  mutate(basic_emp = CNS01+CNS02+CNS03+CNS04+CNS05+CNS06+CNS08+CNS09) %>%
+  mutate(retail_emp = CNS07) %>%
+  mutate(service_emp = total_emp - basic_emp - retail_emp) %>%
+  rename(GEOID = w_tract) %>%
+  select(GEOID, total_emp, basic_emp, retail_emp, service_emp)
+
+tracts <- inner_join(tracts, employment)
+```
+
+## Estimate zonal attractions
+If you refer to Table 4.4 of NCHRP 716 and add together:
+
+* Model 1 for Home-based work person trips
+* Model 3 for Home-Based Nonwork person trips
+* Model 1 for Nonhome Based person trips
+
+You'll get:
+
+Total person trips = 1.3(Households) + 2.4(Basic employment) + 14.3(Retail employment) + 6.1(Service employment)
+
+```{r}
+tracts <- tracts %>%
+  mutate(attractions = (1.3*num_HH) +
+                       (2.4*basic_emp) +
+                      (14.3*retail_emp) +
+                       (6.1*service_emp)) 
+head(tracts)
+```
+
+We should have the same total number of productions and attractions. We do not.
+
+```{r}
+tracts %>%
+  summarise(total_productions = sum(productions, na.rm = TRUE), total_attractions = sum(attractions))
+```
+Trip production models are usually based on better data than trip attraction models, so we'll assume that the total number of trips actually matches the total number of trip productions, and we'll adjust the trip attractions proportionately so that the total is equal to the total number of productions.
+
+```{r}
+tracts <- tracts %>%
+  mutate(bal_attr = (attractions/sum(attractions, na.rm = TRUE)*
+                     sum(productions, na.rm = TRUE)))
+
+tracts %>%
+  summarise(total_productions = sum(productions, na.rm = TRUE), total_attractions = sum(bal_attr))
+```
+
+# Write results
+
+```{r}
+trip_gen <- tracts %>%
+  select(GEOID, productions, bal_attr)
+
+st_write(trip_gen, "trip_gen.geojson")
+```
+

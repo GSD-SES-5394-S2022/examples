@@ -1,0 +1,352 @@
+---
+title: 'Assignment 1: Zones and Networks'
+author: "Carole Voulgaris"
+date: "11/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+These examples are for the Buffalo-Cheektowaga-Niagara Falls, NY metropolitan statistical area (FIPS code 15380)
+
+# Step 0: Load libraries
+
+```{r, message = FALSE}
+options(java.parameters = "-Xmx2G")
+
+library(tidyverse)
+library(tidytransit)
+library(tigris)
+library(r5r)
+library(osmdata)
+library(sf)
+library(ggthemes)
+library(leaflet)
+library(htmlwidgets)
+library(gridExtra)
+library(ggpubr)
+```
+
+
+
+# Step 1: Get Zones
+
+```{r, results='hide', message=FALSE}
+zones <- tracts(state = "NY", 
+                county = c("Erie", "Niagara")) %>%
+  st_transform("WGS84")
+```
+
+I'll create a quick leaflet map to view in my browser to see these zones.
+
+```{r}
+network_map <- leaflet(zones) %>%
+addProviderTiles("Stamen.TonerLite") %>%
+ addPolygons(fillColor = "blue", color = "lightblue", weight = 1,
+              highlightOptions = highlightOptions(fillColor = "gray", fillOpacity = 0.1),
+              label = zones$GEOID,
+              popup = zones$GEOID) 
+
+saveWidget(network_map, file="network_map.html")
+```
+
+When I view the map in my browser window, I can see that two zones (36029990000 and 36063990000) are entirely water. I'll delete these from the layer.
+
+```{r}
+zones <- zones %>%
+  filter(GEOID != "36029990000",
+         GEOID != "36063990000")
+```
+
+# Step 2: Get street network
+
+```{r}
+buffalo_bbox <- st_bbox(zones)
+
+q <- opq(bbox = buffalo_bbox) %>%
+  add_osm_feature(key = 'highway')
+
+q %>% osmdata_xml(file = 'networks/buffalo_network.osm') 
+
+```
+
+You'll need to convert the `*.osm` file to a `*.pbf` using the [osmconvert program](https://wiki.openstreetmap.org/wiki/Osmconvert){target="_blank"}. You can find an executable you can run on Windows in the networks directory of this Repo. If you are on a Mac, ...
+
+# Step 4: Get transit network
+
+```{r}
+download.file(feedlist[feedlist$t == "NFTA GTFS",]$url_d, "networks/NFTA_GTFS.zip")
+```
+
+# Map everything
+
+```{r, message=FALSE, warning=FALSE}
+r5r_core <- setup_r5("networks", verbose = FALSE)
+
+streets <- street_network_to_sf(r5r_core) 
+street_lines <- streets$edges[zones,]
+
+transit <- transit_network_to_sf(r5r_core)
+transit_routes <- transit$routes
+
+```
+
+```{r}
+ggplot(street_lines) +
+  geom_sf(size = 0.01, color = "gray") +
+  geom_sf(data = transit_routes,
+          size = 1,
+          color = "red") +
+  geom_sf(data = zones, fill = NA, color = "blue", alpha = 0.5) +
+  theme_map()
+
+#stop_r5(r5r_core)
+```
+
+
+  
+Based on the maps, I can see that there  
+  
+
+# Step 5: Driving skim
+
+Calculate a matrix of travel times
+
+```{r, warning=FALSE, message=FALSE, results='hide'}
+zone_centroids <- st_centroid(zones) %>%
+  rename(id = GEOID) %>%
+  select(id)
+
+drive_skim <- travel_time_matrix(r5r_core, 
+                   origins = zone_centroids,
+                   destinations = zone_centroids,
+                   mode = "CAR",
+                   verbose = FALSE)
+
+drive_skim_mat <- drive_skim %>%
+  pivot_wider(names_from = toId, values_from = travel_time, names_prefix = "to_")
+```
+
+Select a couple of zones (one centrally located (36029016500), two near the edges (36029940000 is south, 36063024102 is north)) to illustrate travel times.
+
+```{r}
+drive_skim_zones <- zones %>%
+  select(GEOID) %>%
+  rename(fromId = GEOID) %>%
+  left_join(drive_skim_mat) %>%
+  rename(GEOID = fromId)
+
+SW_skims <- ggplot(drive_skim_zones) +
+  geom_sf(aes(fill = to_36029940000), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029940000"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 110)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+NE_skims <- ggplot(drive_skim_zones) +
+  geom_sf(aes(fill = to_36063024102), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36063024102"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 110)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+central_skims <- ggplot(drive_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029016500"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 110)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+legend_skims <- ggplot(drive_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  scale_fill_viridis_c(limits = c(0, 110),
+                       name = "Travel time from\nhighlighted zone\n(minutes)") 
+
+legend <- as_ggplot(get_legend(legend_skims))
+
+grid.arrange(SW_skims, NE_skims, central_skims, legend, ncol=4)
+```
+
+
+# Step 6: Cycling skim
+
+
+```{r}
+bike_skim <- travel_time_matrix(r5r_core, 
+                   origins = zone_centroids,
+                   destinations = zone_centroids,
+                   mode = "BICYCLE",
+                   max_trip_duration = 600,
+                   verbose = FALSE)
+
+bike_skim_mat <- bike_skim %>%
+  pivot_wider(names_from = toId, values_from = travel_time, names_prefix = "to_")
+```
+
+Select a couple of zones (one centrally located (36029016500), two near the edges (36029940000 is south, 36063024102 is north)) to illustrate travel times.
+
+```{r}
+bike_skim_zones <- zones %>%
+  select(GEOID) %>%
+  rename(fromId = GEOID) %>%
+  left_join(bike_skim_mat) %>%
+  rename(GEOID = fromId)
+
+SW_skims_bike <- ggplot(bike_skim_zones) +
+  geom_sf(aes(fill = to_36029940000), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029940000"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 600)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+NE_skims_bike <- ggplot(bike_skim_zones) +
+  geom_sf(aes(fill = to_36063024102), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36063024102"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 600)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+central_skims_bike <- ggplot(bike_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029016500"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 600)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+legend_skims <- ggplot(bike_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  scale_fill_viridis_c(limits = c(0, 600),
+                       name = "Travel time from\nhighlighted zone\n(minutes)") 
+
+legend <- as_ggplot(get_legend(legend_skims))
+
+grid.arrange(SW_skims_bike, NE_skims_bike, central_skims_bike, legend, ncol=4)
+```
+
+# Step 7: Walking skim
+
+```{r}
+walk_skim <- travel_time_matrix(r5r_core, 
+                   origins = zone_centroids,
+                   destinations = zone_centroids,
+                   mode = "WALK",
+                   max_trip_duration = 600,
+                   verbose = FALSE)
+
+walk_skim_mat <- walk_skim %>%
+  pivot_wider(names_from = toId, values_from = travel_time, names_prefix = "to_")
+```
+
+Select a couple of zones (one centrally located (36029016500), two near the edges (36029940000 is south, 36063024102 is north)) to illustrate travel times.
+
+```{r}
+walk_skim_zones <- zones %>%
+  select(GEOID) %>%
+  rename(fromId = GEOID) %>%
+  left_join(walk_skim_mat) %>%
+  rename(GEOID = fromId)
+
+SW_skims_walk <- ggplot(walk_skim_zones) +
+  geom_sf(aes(fill = to_36029940000), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029940000"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 600)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+NE_skims_walk <- ggplot(walk_skim_zones) +
+  geom_sf(aes(fill = to_36063024102), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36063024102"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 600)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+central_skims_walk <- ggplot(walk_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029016500"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 600)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+legend_skims <- ggplot(walk_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  scale_fill_viridis_c(limits = c(0, 600),
+                       name = "Travel time from\nhighlighted zone\n(minutes)") 
+
+legend <- as_ggplot(get_legend(legend_skims))
+
+grid.arrange(SW_skims_walk, NE_skims_walk, central_skims_walk, legend, ncol=4)
+```
+
+# Step 8: Transit skim
+
+```{r}
+transit_skim <- travel_time_matrix(r5r_core, 
+                   origins = zone_centroids,
+                   destinations = zone_centroids,
+                   mode = "TRANSIT",
+                   max_trip_duration = 600,
+                   max_walk_dist = 1000,
+                   verbose = FALSE)
+
+transit_skim_mat <- transit_skim %>%
+  pivot_wider(names_from = toId, values_from = travel_time, names_prefix = "to_")
+```
+
+Select a couple of zones (one centrally located (36029016500), two near the edges (36029940000 is south, 36063024102 is north)) to illustrate travel times.
+
+```{r}
+transit_skim_zones <- zones %>%
+  select(GEOID) %>%
+  rename(fromId = GEOID) %>%
+  left_join(transit_skim_mat) %>%
+  rename(GEOID = fromId)
+
+SW_skims_transit <- ggplot(transit_skim_zones) +
+  geom_sf(aes(fill = to_36029940000), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029940000"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 160)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+NE_skims_transit <- ggplot(transit_skim_zones) +
+  geom_sf(aes(fill = to_36063024102), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36063024102"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 160)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+central_skims_transit <- ggplot(transit_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  geom_sf(data = zones %>% filter(GEOID=="36029016500"),
+          fill = NA, color = "white", size = 1) +
+  scale_fill_viridis_c(limits = c(0, 160)) +
+  theme_map() +
+  theme(legend.position = "none")
+
+legend_skims <- ggplot(transit_skim_zones) +
+  geom_sf(aes(fill = to_36029016500), color = NA) +
+  scale_fill_viridis_c(limits = c(0, 160),
+                       name = "Travel time from\nhighlighted zone\n(minutes)") 
+
+legend <- as_ggplot(get_legend(legend_skims))
+
+grid.arrange(SW_skims_transit, NE_skims_transit, central_skims_transit, legend, ncol=4)
+```
+
+
+```{r}
+stop_r5()
+```

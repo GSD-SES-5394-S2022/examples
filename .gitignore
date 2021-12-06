@@ -37,3 +37,6 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+# osm files (the rule will be to use the osmconvert program (included) to compress them)
+*.osm
